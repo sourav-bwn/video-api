@@ -1,6 +1,6 @@
 import os, re, time, glob, shutil, socket, ipaddress, tempfile, threading, logging
 from urllib.parse import urlparse
-from flask import Flask, request, jsonify, send_file, after_this_request
+from flask import Flask, request, jsonify, send_file
 import yt_dlp
 
 ORIGINS = {o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "https://sourav-garai.vercel.app,https://souravgarai.is-a.dev,http://localhost:8000").split(",") if o.strip()}
@@ -102,8 +102,9 @@ def download():
         return jsonify(error="bad_request", message="Bad request."), 400
     if not sem.acquire(blocking=False):
         return jsonify(error="busy", message="The server is busy with other downloads. Try again in a minute."), 503
-    tmp = tempfile.mkdtemp(prefix="dl_")
+    tmp = None
     try:
+        tmp = tempfile.mkdtemp(prefix="dl_")
         o = {"quiet": True, "noplaylist": True, "outtmpl": os.path.join(tmp, "v.%(ext)s"), "max_filesize": MAX_BYTES, "socket_timeout": 20, "restrictfilenames": True}
         if q == "audio":
             o.update(format="bestaudio/best", postprocessors=[{"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": "128"}])
@@ -117,21 +118,23 @@ def download():
         if not files:
             raise RuntimeError("file is larger than max-filesize")
         path = files[0]
+        # Post-processing/merged outputs may exceed yt-dlp's source-file cap.
+        if os.path.getsize(path) > MAX_BYTES:
+            raise RuntimeError("file is larger than max-filesize")
         title = re.sub(r"[^\w\-. ]+", "", d.get("title") or "video").strip()[:80] or "video"
         name = f"{title}{os.path.splitext(path)[1]}"
-    except Exception as e:
-        shutil.rmtree(tmp, ignore_errors=True)
-        sem.release()
-        code, msg = friendly(e)
-        return jsonify(error=code, message=msg), 422
-
-    @after_this_request
-    def cleanup(resp):
+        # Construct the response before scheduling cleanup so serving failures
+        # take the same cleanup path as extraction failures.
+        response = send_file(path, as_attachment=True, download_name=name)
         def later():
             time.sleep(60)
             shutil.rmtree(tmp, ignore_errors=True)
         threading.Thread(target=later, daemon=True).start()
+        return response
+    except Exception as e:
+        if tmp is not None:
+            shutil.rmtree(tmp, ignore_errors=True)
+        code, msg = friendly(e)
+        return jsonify(error=code, message=msg), 422
+    finally:
         sem.release()
-        return resp
-
-    return send_file(path, as_attachment=True, download_name=name)
