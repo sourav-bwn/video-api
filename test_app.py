@@ -9,6 +9,7 @@ import app as api
 class Downloader:
     def __init__(self, options):
         self.options = options
+        api.last_options = options
     def __enter__(self):
         return self
     def __exit__(self, *args):
@@ -83,9 +84,44 @@ class DownloadTests(unittest.TestCase):
         api.sem.release(); api.sem.release()
 
     def test_invalid_quality_rejected(self):
+        # Any height in 144..4320 is accepted by design; values outside the
+        # range (or non-numeric) must be rejected.
+        for bad in ('100', '5000', 'abc', ''):
+            response = self.client.get('/api/download?url=https://example.org/video&q=' + bad)
+            self.assertEqual(response.status_code, 400, bad)
         response = self.client.get('/api/download?url=https://example.org/video&q=999')
-        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.status_code, 200)
+        response.close()
         self.assert_slots_free()
+
+    def test_download_uses_node_runtime(self):
+        # /api/info passes the Node runtime for YouTube's JS solver; the
+        # download path must too or videos that pass info still fail here.
+        response = self.get()
+        self.assertEqual(response.status_code, 200)
+        response.close()
+        self.assertEqual(api.last_options.get('js_runtimes'), {'node': {}})
+
+    def test_rate_limit_uses_rightmost_forwarded_ip(self):
+        # The leftmost X-Forwarded-For entries are client-controlled; only the
+        # proxy-added rightmost one identifies the client. Spoofing the left
+        # side must not reset the rate-limit bucket.
+        for i in range(6):
+            response = self.client.get('/api/download?url=https://example.org/video&q=720',
+                                       headers={'X-Forwarded-For': f'198.51.100.{i}, 203.0.113.7'})
+            self.assertEqual(response.status_code, 200)
+            response.close()
+        response = self.client.get('/api/download?url=https://example.org/video&q=720',
+                                   headers={'X-Forwarded-For': '198.51.100.99, 203.0.113.7'})
+        self.assertEqual(response.status_code, 429)
+
+    def test_stale_rate_limit_entries_swept(self):
+        api.last_sweep = 0.0  # force the sweep on the next request
+        api.hits[('dl', '192.0.2.1')] = [0.0]  # long outside any window
+        response = self.get()
+        self.assertEqual(response.status_code, 200)
+        response.close()
+        self.assertNotIn(('dl', '192.0.2.1'), api.hits)
 
 
 if __name__ == '__main__':
