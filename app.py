@@ -22,8 +22,17 @@ def cors(resp):
     return resp
 
 
+def client_ip():
+    # The proxy adds the real client IP as the LAST X-Forwarded-For entry;
+    # everything to its left is client-controlled and easy to spoof.
+    xff = request.headers.get("X-Forwarded-For", "")
+    if xff:
+        return xff.split(",")[-1].strip()
+    return request.remote_addr or ""
+
+
 def limited(kind, limit, window):
-    ip = (request.headers.get("X-Forwarded-For", request.remote_addr or "") or "").split(",")[0].strip()
+    ip = client_ip()
     now = time.time()
     with lock:
         arr = [t for t in hits.get((kind, ip), []) if now - t < window]
