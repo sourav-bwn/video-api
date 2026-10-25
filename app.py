@@ -10,6 +10,8 @@ logging.basicConfig(level=logging.INFO)
 sem = threading.Semaphore(2)
 hits = {}
 lock = threading.Lock()
+SWEEP_INTERVAL = 600
+last_sweep = 0.0
 
 
 @app.after_request
@@ -32,9 +34,20 @@ def client_ip():
 
 
 def limited(kind, limit, window):
+    global last_sweep
     ip = client_ip()
     now = time.time()
     with lock:
+        # Entries are never evicted otherwise: on a long-running dyno the
+        # dict grows with every IP ever seen.
+        if now - last_sweep >= SWEEP_INTERVAL:
+            for key, arr in list(hits.items()):
+                fresh = [t for t in arr if now - t < window]
+                if fresh:
+                    hits[key] = fresh
+                else:
+                    del hits[key]
+            last_sweep = now
         arr = [t for t in hits.get((kind, ip), []) if now - t < window]
         if len(arr) >= limit:
             hits[(kind, ip)] = arr
