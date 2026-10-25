@@ -141,7 +141,7 @@ def download():
     tmp = None
     try:
         tmp = tempfile.mkdtemp(prefix="dl_")
-        o = {"quiet": True, "noplaylist": True, "outtmpl": os.path.join(tmp, "v.%(ext)s"), "max_filesize": MAX_BYTES, "socket_timeout": 20, "restrictfilenames": True}
+        o = {"quiet": True, "noplaylist": True, "outtmpl": os.path.join(tmp, "v.%(ext)s"), "max_filesize": MAX_BYTES, "socket_timeout": 20, "restrictfilenames": True, "js_runtimes": {"node": {}}}
         if q == "audio":
             o.update(format="bestaudio/best", postprocessors=[{"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": "128"}])
         elif q == "best":
